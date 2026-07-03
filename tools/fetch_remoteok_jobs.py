@@ -46,6 +46,7 @@ def fetch_recent_jobs(hours: int = 48, max_items: int = 8) -> list[dict]:
             "company": entry.get("company"),
             "url": entry.get("url"),
             "posted": posted,
+            "description": entry.get("description", ""),
         })
         if len(jobs) >= max_items:
             break

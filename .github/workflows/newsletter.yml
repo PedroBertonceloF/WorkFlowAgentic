@@ -28,6 +28,6 @@ jobs:
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: |
-          BODY_FILE=".tmp/newsletter_$(date +%Y-%m-%d).txt"
+          BODY_FILE=".tmp/newsletter_$(date +%Y-%m-%d).html"
           SUBJECT=$(cat .tmp/newsletter_subject.txt)
-          python tools/send_gmail.py --subject "$SUBJECT" --body-file "$BODY_FILE"
+          python tools/send_gmail.py --subject "$SUBJECT" --body-file "$BODY_FILE" --html

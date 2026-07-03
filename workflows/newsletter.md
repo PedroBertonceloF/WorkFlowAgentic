@@ -27,16 +27,25 @@ Execução automática: `.github/workflows/newsletter.yml`, cron diário às
   para vagas de estágio brasileiras (Indeed BR descontinuou RSS). Se
   aparecer uma fonte melhor no futuro, trocar aqui.
 
+## Melhorias futuras (não implementadas ainda)
+- Resumo real para notícias/concursos: Google News RSS não fornece
+  snippet/descrição, só título. Daria pra visitar cada link e extrair a
+  meta-descrição da página, mas é mais lento/frágil (cada site é
+  diferente, pode bloquear scraping) — avaliar se vale a pena depois.
+
 ## Passo a passo (executado pelo tool, não por um agente)
 
 1. `python tools/build_newsletter.py`
    - Busca as 3 categorias e escreve:
-     - `.tmp/newsletter_<YYYY-MM-DD>.txt` (corpo)
+     - `.tmp/newsletter_<YYYY-MM-DD>.html` (corpo, HTML formatado)
      - `.tmp/newsletter_subject.txt` (assunto)
    - Se uma categoria não tiver nada relevante no dia, escreve "Nada de novo
      relevante hoje" em vez de inventar conteúdo.
+   - Título de cada item é um link clicável (a URL não aparece no corpo),
+     com fonte + tempo relativo ("há X horas") como metadado, e um resumo
+     curto pras vagas (Remote OK fornece descrição; Google News RSS não).
 
-2. `python tools/send_gmail.py --subject "$(cat .tmp/newsletter_subject.txt)" --body-file .tmp/newsletter_<data>.txt`
+2. `python tools/send_gmail.py --subject "$(cat .tmp/newsletter_subject.txt)" --body-file .tmp/newsletter_<data>.html --html`
    - Local: usa `credentials.json` + `token.json` (OAuth interativo na
      primeira vez).
    - GitHub Actions: usa os secrets `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
