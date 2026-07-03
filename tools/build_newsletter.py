@@ -13,6 +13,7 @@ import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from dedup_log import load_sent_links, mark_sent, prune_old, save_sent_links
 from fetch_google_news import fetch_recent
 from fetch_remoteok_jobs import fetch_recent_jobs
 
@@ -85,12 +86,12 @@ def render_item(title: str, link: str, meta: str, summary: str = "") -> str:
     """
 
 
-def render_empty_row() -> str:
+def render_empty_row(message: str = "Nada de novo relevante hoje.") -> str:
     return f"""
     <tr>
       <td style="padding:12px 0;border-bottom:1px solid {COLOR_BORDER};
                  font-size:14px;color:{COLOR_MUTED};font-style:italic;">
-        Nada de novo relevante hoje.
+        {html.escape(message)}
       </td>
     </tr>
     """
@@ -115,38 +116,63 @@ def render_section(icon: str, title: str, rows_html: str) -> str:
     """
 
 
-def build_news_rows(queries: list[str]) -> str:
+def build_news_rows(queries: list[str], sent_links: dict[str, str]) -> tuple[str, list[str]]:
     seen_links = set()
     rows = []
+    included = []
+    any_query_ok = False
     for query in queries:
-        for item in fetch_recent(query, hours=48, max_items=MAX_ITEMS_PER_SECTION):
-            if item["link"] in seen_links or len(rows) >= MAX_ITEMS_PER_SECTION:
+        try:
+            results = fetch_recent(query, hours=48, max_items=MAX_ITEMS_PER_SECTION)
+            any_query_ok = True
+        except Exception as exc:
+            print(f"[aviso] falha ao buscar '{query}': {exc}")
+            continue
+        for item in results:
+            link = item["link"]
+            if link in seen_links or link in sent_links or len(rows) >= MAX_ITEMS_PER_SECTION:
                 continue
-            seen_links.add(item["link"])
+            seen_links.add(link)
+            included.append(link)
             meta = f"{item['source']} - {relative_time(item['pub_date'])}"
-            rows.append(render_item(item["title"], item["link"], meta))
-    return "".join(rows) if rows else render_empty_row()
+            rows.append(render_item(item["title"], link, meta))
+    if rows:
+        return "".join(rows), included
+    if not any_query_ok:
+        return render_empty_row("Nao foi possivel buscar essa categoria hoje (erro temporario)."), included
+    return render_empty_row(), included
 
 
-def build_jobs_rows() -> str:
-    jobs = fetch_recent_jobs(hours=48, max_items=MAX_ITEMS_PER_SECTION)
-    if not jobs:
-        return render_empty_row()
+def build_jobs_rows(sent_links: dict[str, str]) -> tuple[str, list[str]]:
+    try:
+        jobs = fetch_recent_jobs(hours=48, max_items=MAX_ITEMS_PER_SECTION)
+    except Exception as exc:
+        print(f"[aviso] falha ao buscar vagas: {exc}")
+        return render_empty_row("Nao foi possivel buscar essa categoria hoje (erro temporario)."), []
     rows = []
+    included = []
     for job in jobs:
+        if job["url"] in sent_links or len(rows) >= MAX_ITEMS_PER_SECTION:
+            continue
+        included.append(job["url"])
         meta = f"{job['company']} - {relative_time(job['posted'])}"
         summary = strip_html(job.get("description", ""))
         rows.append(render_item(job["position"], job["url"], meta, summary))
-    return "".join(rows)
+    return ("".join(rows) if rows else render_empty_row()), included
 
 
-def build_body() -> str:
+def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
     today_label = date.today().strftime("%d/%m/%Y")
-    news_section = render_section("📰", "Noticias de Tecnologia", build_news_rows(NEWS_QUERIES))
-    jobs_section = render_section("💼", "Vagas Remotas de TI (Remote OK)", build_jobs_rows())
-    concursos_section = render_section("📋", "Concursos Publicos de TI", build_news_rows(CONCURSOS_QUERIES))
+    news_rows, news_included = build_news_rows(NEWS_QUERIES, sent_links)
+    jobs_rows, jobs_included = build_jobs_rows(sent_links)
+    concursos_rows, concursos_included = build_news_rows(CONCURSOS_QUERIES, sent_links)
 
-    return f"""<!DOCTYPE html>
+    news_section = render_section("📰", "Noticias de Tecnologia", news_rows)
+    jobs_section = render_section("💼", "Vagas Remotas de TI (Remote OK)", jobs_rows)
+    concursos_section = render_section("📋", "Concursos Publicos de TI", concursos_rows)
+    all_included = news_included + jobs_included + concursos_included
+
+    body = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
@@ -196,19 +222,25 @@ def build_body() -> str:
   </table>
 </body>
 </html>"""
+    return body, all_included
 
 
 def main():
     TMP_DIR.mkdir(exist_ok=True)
-    body = build_body()
-    today = date.today().isoformat()
-    body_path = TMP_DIR / f"newsletter_{today}.html"
+    today = date.today()
+
+    sent_links = prune_old(load_sent_links(), today)
+    body, included_links = build_body(sent_links)
+
+    body_path = TMP_DIR / f"newsletter_{today.isoformat()}.html"
     subject_path = TMP_DIR / "newsletter_subject.txt"
 
     body_path.write_text(body, encoding="utf-8")
-    subject_path.write_text(
-        f"Newsletter Computacao - {date.today().strftime('%d/%m/%Y')}", encoding="utf-8"
-    )
+    subject_path.write_text(f"Newsletter Computacao - {today.strftime('%d/%m/%Y')}", encoding="utf-8")
+
+    sent_links = mark_sent(sent_links, included_links, today)
+    save_sent_links(sent_links)
+
     print(f"Corpo escrito em {body_path}")
 
 

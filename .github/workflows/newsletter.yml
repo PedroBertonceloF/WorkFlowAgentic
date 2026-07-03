@@ -5,6 +5,9 @@ on:
     - cron: "0 16 * * *" # 12:00 America/Cuiaba
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
@@ -31,3 +34,13 @@ jobs:
           BODY_FILE=".tmp/newsletter_$(date +%Y-%m-%d).html"
           SUBJECT=$(cat .tmp/newsletter_subject.txt)
           python tools/send_gmail.py --subject "$SUBJECT" --body-file "$BODY_FILE" --html
+
+      - name: Salvar log de deduplicacao
+        run: |
+          if ! git diff --quiet -- data/sent_links.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/sent_links.json
+            git commit -m "Atualizar log de links enviados [skip ci]"
+            git push
+          fi
