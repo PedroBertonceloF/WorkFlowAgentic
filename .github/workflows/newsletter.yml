@@ -1,0 +1,33 @@
+name: Newsletter Diária
+
+on:
+  schedule:
+    - cron: "0 16 * * *" # 12:00 America/Cuiaba
+  workflow_dispatch: {}
+
+jobs:
+  send-newsletter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Montar corpo da newsletter
+        run: python tools/build_newsletter.py
+
+      - name: Enviar e-mail
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: |
+          BODY_FILE=".tmp/newsletter_$(date +%Y-%m-%d).txt"
+          SUBJECT=$(cat .tmp/newsletter_subject.txt)
+          python tools/send_gmail.py --subject "$SUBJECT" --body-file "$BODY_FILE"
