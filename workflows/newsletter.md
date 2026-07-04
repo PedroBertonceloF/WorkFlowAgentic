@@ -18,27 +18,34 @@ Execução automática: `.github/workflows/newsletter.yml`, cron diário às
 16:00 UTC (12:00 horário de Cuiabá/Brasil).
 
 ## Fontes de conteúdo
-- **Notícias e concursos**: Google News RSS (`tools/fetch_google_news.py`) —
-  busca gratuita, sem API key, filtra itens das últimas 48h.
-- **Vagas**: API pública do Remote OK (`tools/fetch_remoteok_jobs.py`) —
-  filtra por tags relevantes de tech (dev, engineer, python, javascript,
-  junior, etc.), últimas 48h. Nota: são vagas remotas/internacionais, não
-  especificamente estágios no Brasil — não achamos fonte gratuita de RSS
-  para vagas de estágio brasileiras (Indeed BR descontinuou RSS). Se
-  aparecer uma fonte melhor no futuro, trocar aqui.
+- **Notícias**: Google News RSS (`tools/fetch_google_news.py`) + Hacker News
+  via API Algolia (`tools/fetch_hackernews.py`, filtra por pontuação mínima) +
+  dev.to via API pública (`tools/fetch_devto.py`, já traz descrição). Todas
+  gratuitas, sem API key, filtram itens das últimas 48h.
+- **Concursos**: Google News RSS (`tools/fetch_google_news.py`).
+- **Vagas remotas (internacional)**: API pública do Remote OK
+  (`tools/fetch_remoteok_jobs.py`) — filtra por tags relevantes de tech, 48h.
+- **Vagas tech no Brasil**: RSS do ProgramaThor
+  (`tools/fetch_programathor.py`) — prioriza estágio/júnior/pleno pela tag de
+  senioridade no título, últimas 72h. Foi a fonte gratuita e confiável de
+  vagas BR que faltava (Indeed BR descontinuou RSS; Vagas.com/Catho/Gupy não
+  expõem RSS público útil).
+
+## Resumos (IA opcional, com fallback determinístico)
+`tools/summarize.py` gera um resumo de 1 linha em PT-BR para itens que só têm
+título (Google News e Hacker News não trazem descrição):
+- **Com `GEMINI_API_KEY`**: uma única chamada em lote ao Gemini
+  (`gemini-2.5-flash`, tier gratuito), com grounding do Google Search para
+  resumir de forma factual. Mesmo padrão de cliente do `aquaia-ufms`.
+- **Sem chave / se o Gemini falhar**: busca a `og:description` /
+  `<meta name="description">` da página como fallback. Links do Google News
+  redirecionam por JS e não expõem meta útil, então nesses casos o item sai só
+  com título (como antes). Nenhuma falha de resumo cancela o e-mail.
 
 ## Melhorias futuras (não implementadas ainda)
-- Resumo real para notícias/concursos: Google News RSS não fornece
-  snippet/descrição, só título. Daria pra visitar cada link e extrair a
-  meta-descrição da página, mas é mais lento/frágil (cada site é
-  diferente, pode bloquear scraping) — avaliar se vale a pena depois.
-- Vagas de estágio no Brasil: pesquisado e descartado por ora. Indeed BR
-  descontinuou RSS; Vagas.com/Catho/Gupy não expõem RSS/API pública;
-  Bing RSS com `site:vagas.com.br`/`site:gupy.io` só retorna páginas
-  institucionais estáticas (Super Estágios, CIEE), não vagas individuais
-  frescas, e a "data" é a de indexação do Bing, não da vaga — não dá pra
-  filtrar por "novo nas últimas 48h" de verdade. Sem fonte gratuita
-  confiável encontrada até agora.
+- Curadoria/ranking semântico por IA (hoje a IA só resume, não prioriza).
+- Seguir o redirect do Google News para pegar a URL real e resumir com base no
+  texto do artigo (hoje o resumo desses itens depende do grounding do Gemini).
 
 ## Passo a passo (executado pelo tool, não por um agente)
 
@@ -71,7 +78,11 @@ Execução automática: `.github/workflows/newsletter.yml`, cron diário às
 
 ## Tools usados
 - `tools/fetch_google_news.py` — busca RSS (notícias, concursos)
-- `tools/fetch_remoteok_jobs.py` — busca API (vagas)
+- `tools/fetch_hackernews.py` — busca stories no HN (API Algolia)
+- `tools/fetch_devto.py` — busca artigos no dev.to (API pública)
+- `tools/fetch_remoteok_jobs.py` — busca vagas remotas internacionais (API)
+- `tools/fetch_programathor.py` — busca vagas tech no Brasil (RSS)
+- `tools/summarize.py` — resumos (Gemini opcional + fallback meta-descrição)
 - `tools/dedup_log.py` — carrega/atualiza/poda o log de links já enviados
 - `tools/build_newsletter.py` — monta o corpo do e-mail
 - `tools/send_gmail.py` — envio via Gmail API
@@ -101,6 +112,10 @@ Execução automática: `.github/workflows/newsletter.yml`, cron diário às
   git — ficam só no `.gitignore` local. No GitHub Actions, os mesmos valores
   vivem como Repository Secrets (`GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
   `GMAIL_REFRESH_TOKEN`, `RECIPIENT_EMAIL`), criptografados pelo GitHub.
+- `GEMINI_API_KEY` (opcional): habilita os resumos por IA. É gratuito
+  (Google AI Studio) e roda em 1 chamada/dia, bem dentro do tier grátis. Sem
+  ele, o newsletter usa o fallback de meta-descrição. `GEMINI_MODEL` é
+  opcional (default `gemini-2.5-flash`).
 - Descartamos a ideia inicial de usar uma cloud routine do Claude Code
   (`/schedule`) porque exigiria comitar as credenciais do Gmail num
   repositório para o agente de nuvem acessar — GitHub Actions com secrets

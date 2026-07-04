@@ -14,8 +14,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from dedup_log import load_sent_links, mark_sent, prune_old, save_sent_links
+from fetch_devto import fetch_recent_articles
 from fetch_google_news import fetch_recent
+from fetch_hackernews import fetch_recent_stories
+from fetch_programathor import fetch_recent_br_jobs
 from fetch_remoteok_jobs import fetch_recent_jobs
+from summarize import enrich_summaries
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TMP_DIR = BASE_DIR / ".tmp"
@@ -31,20 +35,28 @@ CONCURSOS_QUERIES = [
     "concurso publico tecnologia da informacao edital",
 ]
 
-# Paleta neutra com um unico acento (sem roxo/gradiente "cara de IA")
-COLOR_BG = "#f5f5f4"
-COLOR_CARD_BG = "#ffffff"
-COLOR_TEXT = "#292524"
-COLOR_MUTED = "#78716c"
-COLOR_ACCENT = "#0f5d6b"  # azul-petroleo
-COLOR_BORDER = "#e7e5e4"
+# Identidade visual PBF (ver .claude/LOGO.png) + regra 60-30-10 do ColorSheet:
+# 60% fundo off-white, 30% apoio azul, 10% destaque navy.
+BRAND_NAVY = "#1a3a5f"     # primaria / destaque (headers, links)
+SUPPORT_BLUE = "#aabccf"   # secundaria (bordas, detalhes)
+OFF_WHITE = "#f7f7f7"      # fundo
+ACCENT_GREY = "#687d6a"    # apoio (metadados)
 
-DARK_BG = "#1c1917"
-DARK_CARD_BG = "#292524"
-DARK_TEXT = "#f5f5f4"
-DARK_MUTED = "#a8a29e"
-DARK_ACCENT = "#5eead4"
-DARK_BORDER = "#44403c"
+COLOR_BG = OFF_WHITE
+COLOR_CARD_BG = "#ffffff"
+COLOR_TEXT = "#1f2d3d"     # navy suavizado, legivel pra corpo
+COLOR_MUTED = ACCENT_GREY
+COLOR_ACCENT = BRAND_NAVY
+COLOR_BORDER = SUPPORT_BLUE
+
+DARK_BG = "#0f2233"        # navy profundo
+DARK_CARD_BG = "#16293b"
+DARK_TEXT = OFF_WHITE
+DARK_MUTED = SUPPORT_BLUE
+DARK_ACCENT = SUPPORT_BLUE
+DARK_BORDER = "#2a4055"
+
+FONT_STACK = "'Poppins',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 
 
 def strip_html(raw: str, max_len: int = 160) -> str:
@@ -69,17 +81,17 @@ def relative_time(dt: datetime) -> str:
 
 def render_item(title: str, link: str, meta: str, summary: str = "") -> str:
     summary_html = (
-        f'<p style="margin:4px 0 0;font-size:14px;line-height:1.5;'
+        f'<p class="text" style="margin:4px 0 0;font-size:14px;line-height:1.5;'
         f'color:{COLOR_TEXT};">{html.escape(summary)}</p>'
         if summary
         else ""
     )
     return f"""
     <tr>
-      <td style="padding:12px 0;border-bottom:1px solid {COLOR_BORDER};">
-        <a href="{html.escape(link)}" style="font-size:15px;font-weight:600;
+      <td class="border-row" style="padding:12px 0;border-bottom:1px solid {COLOR_BORDER};">
+        <a class="accent" href="{html.escape(link)}" style="font-size:15px;font-weight:600;
            color:{COLOR_ACCENT};text-decoration:none;">{html.escape(title)}</a>
-        <p style="margin:4px 0 0;font-size:12px;color:{COLOR_MUTED};">{html.escape(meta)}</p>
+        <p class="muted" style="margin:4px 0 0;font-size:12px;color:{COLOR_MUTED};">{html.escape(meta)}</p>
         {summary_html}
       </td>
     </tr>
@@ -89,7 +101,7 @@ def render_item(title: str, link: str, meta: str, summary: str = "") -> str:
 def render_empty_row(message: str = "Nada de novo relevante hoje.") -> str:
     return f"""
     <tr>
-      <td style="padding:12px 0;border-bottom:1px solid {COLOR_BORDER};
+      <td class="border-row muted" style="padding:12px 0;border-bottom:1px solid {COLOR_BORDER};
                  font-size:14px;color:{COLOR_MUTED};font-style:italic;">
         {html.escape(message)}
       </td>
@@ -101,7 +113,7 @@ def render_section(icon: str, title: str, rows_html: str) -> str:
     return f"""
     <tr>
       <td style="padding:24px 0 8px;">
-        <h2 style="margin:0;font-size:17px;font-weight:700;color:{COLOR_ACCENT};">
+        <h2 class="accent" style="margin:0;font-size:17px;font-weight:700;color:{COLOR_ACCENT};">
           {icon} {html.escape(title)}
         </h2>
       </td>
@@ -116,61 +128,119 @@ def render_section(icon: str, title: str, rows_html: str) -> str:
     """
 
 
-def build_news_rows(queries: list[str], sent_links: dict[str, str]) -> tuple[str, list[str]]:
-    seen_links = set()
-    rows = []
-    included = []
-    any_query_ok = False
+def _add_items(dest: list[dict], seen: set, sent_links: dict[str, str],
+               new_items: list[dict], limit: int) -> None:
+    """Adiciona itens novos (nao repetidos nem ja enviados) ate o limite."""
+    for item in new_items:
+        link = item.get("link")
+        if not link or link in seen or link in sent_links or len(dest) >= limit:
+            continue
+        seen.add(link)
+        dest.append(item)
+
+
+def collect_google_news(queries: list[str], sent_links: dict[str, str],
+                        seen: set, dest: list[dict], limit: int) -> bool:
+    any_ok = False
     for query in queries:
         try:
             results = fetch_recent(query, hours=48, max_items=MAX_ITEMS_PER_SECTION)
-            any_query_ok = True
+            any_ok = True
         except Exception as exc:
             print(f"[aviso] falha ao buscar '{query}': {exc}")
             continue
-        for item in results:
-            link = item["link"]
-            if link in seen_links or link in sent_links or len(rows) >= MAX_ITEMS_PER_SECTION:
-                continue
-            seen_links.add(link)
-            included.append(link)
-            meta = f"{item['source']} - {relative_time(item['pub_date'])}"
-            rows.append(render_item(item["title"], link, meta))
-    if rows:
-        return "".join(rows), included
-    if not any_query_ok:
-        return render_empty_row("Nao foi possivel buscar essa categoria hoje (erro temporario)."), included
-    return render_empty_row(), included
+        _add_items(dest, seen, sent_links, results, limit)
+    return any_ok
 
 
-def build_jobs_rows(sent_links: dict[str, str]) -> tuple[str, list[str]]:
+def collect_news(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
+    """Noticias: Google News + Hacker News + dev.to, deduplicados."""
+    seen: set = set()
+    items: list[dict] = []
+    limit = MAX_ITEMS_PER_SECTION + 3
+    any_ok = collect_google_news(NEWS_QUERIES, sent_links, seen, items, limit)
+    for label, fetcher in (
+        ("Hacker News", lambda: fetch_recent_stories(hours=48, max_items=3, min_points=100)),
+        ("dev.to", lambda: fetch_recent_articles(hours=48, max_items=3)),
+    ):
+        try:
+            _add_items(items, seen, sent_links, fetcher(), limit)
+            any_ok = True
+        except Exception as exc:
+            print(f"[aviso] falha ao buscar {label}: {exc}")
+    return items, any_ok
+
+
+def collect_concursos(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
+    seen: set = set()
+    items: list[dict] = []
+    any_ok = collect_google_news(CONCURSOS_QUERIES, sent_links, seen, items, MAX_ITEMS_PER_SECTION)
+    return items, any_ok
+
+
+def collect_remoteok(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
     try:
         jobs = fetch_recent_jobs(hours=48, max_items=MAX_ITEMS_PER_SECTION)
     except Exception as exc:
-        print(f"[aviso] falha ao buscar vagas: {exc}")
-        return render_empty_row("Nao foi possivel buscar essa categoria hoje (erro temporario)."), []
-    rows = []
-    included = []
+        print(f"[aviso] falha ao buscar vagas Remote OK: {exc}")
+        return [], False
+    items = []
     for job in jobs:
-        if job["url"] in sent_links or len(rows) >= MAX_ITEMS_PER_SECTION:
+        if job["url"] in sent_links:
             continue
-        included.append(job["url"])
-        meta = f"{job['company']} - {relative_time(job['posted'])}"
-        summary = strip_html(job.get("description", ""))
-        rows.append(render_item(job["position"], job["url"], meta, summary))
-    return ("".join(rows) if rows else render_empty_row()), included
+        items.append({
+            "title": job["position"],
+            "link": job["url"],
+            "source": job["company"],
+            "pub_date": job["posted"],
+            "description": strip_html(job.get("description", "")),
+        })
+    return items, True
+
+
+def collect_programathor(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
+    try:
+        jobs = fetch_recent_br_jobs(hours=72, max_items=MAX_ITEMS_PER_SECTION)
+    except Exception as exc:
+        print(f"[aviso] falha ao buscar vagas ProgramaThor: {exc}")
+        return [], False
+    return [j for j in jobs if j["link"] not in sent_links], True
+
+
+def render_rows(items: list[dict], summaries: dict[str, str], any_ok: bool) -> str:
+    if not items:
+        if not any_ok:
+            return render_empty_row("Nao foi possivel buscar essa categoria hoje (erro temporario).")
+        return render_empty_row()
+    rows = []
+    for it in items:
+        meta = f"{it['source']} - {relative_time(it['pub_date'])}"
+        summary = summaries.get(it["link"], "") or it.get("description", "")
+        rows.append(render_item(it["title"], it["link"], meta, summary))
+    return "".join(rows)
 
 
 def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
     today_label = date.today().strftime("%d/%m/%Y")
-    news_rows, news_included = build_news_rows(NEWS_QUERIES, sent_links)
-    jobs_rows, jobs_included = build_jobs_rows(sent_links)
-    concursos_rows, concursos_included = build_news_rows(CONCURSOS_QUERIES, sent_links)
 
-    news_section = render_section("📰", "Noticias de Tecnologia", news_rows)
-    jobs_section = render_section("💼", "Vagas Remotas de TI (Remote OK)", jobs_rows)
-    concursos_section = render_section("📋", "Concursos Publicos de TI", concursos_rows)
-    all_included = news_included + jobs_included + concursos_included
+    news_items, news_ok = collect_news(sent_links)
+    concursos_items, concursos_ok = collect_concursos(sent_links)
+    remoteok_items, remoteok_ok = collect_remoteok(sent_links)
+    br_items, br_ok = collect_programathor(sent_links)
+
+    # Resumos: uma unica chamada pro que so tem titulo (noticias + concursos).
+    # Vagas ja trazem descricao/titulo suficiente, nao entram no resumo.
+    summaries = enrich_summaries(news_items + concursos_items)
+
+    news_section = render_section("📰", "Noticias de Tecnologia",
+                                  render_rows(news_items, summaries, news_ok))
+    br_jobs_section = render_section("🇧🇷", "Vagas Tech no Brasil (ProgramaThor)",
+                                     render_rows(br_items, summaries, br_ok))
+    jobs_section = render_section("💼", "Vagas Remotas de TI (Remote OK)",
+                                  render_rows(remoteok_items, summaries, remoteok_ok))
+    concursos_section = render_section("📋", "Concursos Publicos de TI",
+                                       render_rows(concursos_items, summaries, concursos_ok))
+    all_included = [it["link"] for it in news_items + concursos_items + remoteok_items + br_items]
 
     body = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -180,6 +250,7 @@ def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap');
   body {{ background-color: {COLOR_BG}; }}
   .card {{ background-color: {COLOR_CARD_BG}; }}
   .muted {{ color: {COLOR_MUTED}; }}
@@ -193,7 +264,7 @@ def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
   }}
 </style>
 </head>
-<body style="margin:0;padding:0;background-color:{COLOR_BG};font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+<body style="margin:0;padding:0;background-color:{COLOR_BG};font-family:{FONT_STACK};">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr>
       <td align="center" style="padding:24px 16px;">
@@ -201,19 +272,25 @@ def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
                class="card" style="max-width:600px;width:100%;background-color:{COLOR_CARD_BG};
                border-radius:8px;padding:24px 32px;">
           <tr>
-            <td style="padding-bottom:16px;border-bottom:2px solid {COLOR_ACCENT};">
-              <h1 style="margin:0;font-size:22px;font-weight:800;color:{COLOR_TEXT};">
-                Newsletter Computacao
+            <td style="padding-bottom:16px;border-bottom:3px solid {COLOR_ACCENT};">
+              <span class="accent" style="display:inline-block;font-size:28px;font-weight:800;
+                     letter-spacing:-1.5px;color:{COLOR_ACCENT};line-height:1;">pbf</span>
+              <h1 class="text" style="margin:8px 0 0;font-size:20px;font-weight:800;color:{COLOR_TEXT};">
+                Newsletter de Computação
               </h1>
-              <p style="margin:4px 0 0;font-size:13px;color:{COLOR_MUTED};">{today_label}</p>
+              <p class="muted" style="margin:4px 0 0;font-size:13px;color:{COLOR_MUTED};">
+                {today_label} &nbsp;·&nbsp; por PBF
+              </p>
             </td>
           </tr>
           {news_section}
+          {br_jobs_section}
           {jobs_section}
           {concursos_section}
           <tr>
             <td style="padding-top:24px;font-size:11px;color:{COLOR_MUTED};">
-              Fontes: Google News RSS e Remote OK API. Gerado automaticamente todo dia.
+              Fontes: Google News, Hacker News, dev.to, ProgramaThor e Remote OK.
+              Gerado automaticamente todo dia.
             </td>
           </tr>
         </table>
