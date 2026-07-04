@@ -83,9 +83,22 @@ título (Google News e Hacker News não trazem descrição):
 - `tools/fetch_remoteok_jobs.py` — busca vagas remotas internacionais (API)
 - `tools/fetch_programathor.py` — busca vagas tech no Brasil (RSS)
 - `tools/summarize.py` — resumos (Gemini opcional + fallback meta-descrição)
+- `tools/generate_cover.py` — capa duotone da edição via Kie.ai (opcional)
 - `tools/dedup_log.py` — carrega/atualiza/poda o log de links já enviados
 - `tools/build_newsletter.py` — monta o corpo do e-mail
 - `tools/send_gmail.py` — envio via Gmail API
+
+## Design ("Boletim Dev")
+Identidade PBF (ver `.claude/LOGO.png`). O e-mail é desenhado pra sobreviver ao
+Gmail, que ignora web-fonts e boa parte do CSS: tipografia **Georgia**
+(manchetes) + **monospace** (rótulos/tags técnicas) + sans (corpo), todas fontes
+de sistema — não depende de Poppins carregar. Elementos: masthead `pbf ///` com
+indicador "● no ar" (sage), "release stamp" com contagens do dia, **capa
+duotone** (Kie.ai ou fallback CSS), **destaque do dia** (1ª notícia em manchete
+grande), seções com rótulo mono + contador `[NN]`, fonte como **chip mono**,
+senioridade de vaga como **selo** `[ jr ]` (estágio/júnior destacados em sage).
+Paleta navy `#1A3A5F` / support-blue `#AABCCF` / off-white `#F7F7F7` / sage
+`#687D6A`, regra 60-30-10.
 
 ## Tratamento de erros
 - Se uma busca falhar (rede/timeout), não travar o workflow inteiro — a
@@ -116,6 +129,11 @@ título (Google News e Hacker News não trazem descrição):
   (Google AI Studio) e roda em 1 chamada/dia, bem dentro do tier grátis. Sem
   ele, o newsletter usa o fallback de meta-descrição. `GEMINI_MODEL` é
   opcional (default `gemini-2.5-flash`).
+- `KIE_API_KEY` (opcional): habilita a capa duotone gerada pela Kie.ai (API
+  assíncrona createTask→poll→URL). Sem ela, o e-mail usa a faixa duotone em
+  CSS. `KIE_MODEL` é opcional (default `google/nano-banana`). A capa usa a URL
+  hospedada que a Kie.ai devolve — o repo é privado, então não dá pra usar
+  GitHub raw pra hospedar imagem em e-mail.
 - Descartamos a ideia inicial de usar uma cloud routine do Claude Code
   (`/schedule`) porque exigiria comitar as credenciais do Gmail num
   repositório para o agente de nuvem acessar — GitHub Actions com secrets

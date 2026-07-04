@@ -36,6 +36,10 @@ def fetch_recent(query: str, hours: int = 48, max_items: int = 8) -> list[dict]:
         link = item.findtext("link", "").strip()
         pub_date_raw = item.findtext("pubDate", "")
         source = item.findtext("source", "")
+        # O Google News acrescenta " - Veiculo" no fim do titulo; como o veiculo
+        # ja aparece como chip de fonte no e-mail, removemos o sufixo redundante.
+        if source and title.endswith(f" - {source}"):
+            title = title[: -len(f" - {source}")].strip()
         try:
             pub_date = parsedate_to_datetime(pub_date_raw)
         except (TypeError, ValueError):

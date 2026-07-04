@@ -25,6 +25,8 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
+          KIE_MODEL: ${{ secrets.KIE_MODEL }}
         run: python tools/build_newsletter.py
 
       - name: Enviar e-mail

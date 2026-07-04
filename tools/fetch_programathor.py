@@ -79,7 +79,8 @@ def fetch_recent_br_jobs(hours: int = 120, max_items: int = 5) -> list[dict]:
         jobs.append({
             "title": _clean_title(raw_title),
             "link": link,
-            "source": f"ProgramaThor{f' - {level.capitalize()}' if level else ''}",
+            "source": "ProgramaThor",
+            "level": level,  # '' | estagio | junior | pleno | senior (vira selo no e-mail)
             "pub_date": pub_date,
             "_rank": LEVEL_RANK.get(level, 3),
         })
