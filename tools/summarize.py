@@ -99,7 +99,7 @@ def _gemini_summaries(items: list[dict]) -> dict[str, str]:
         "com a chave sendo o numero da manchete.\n\n"
         f"{numbered}"
     )
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
