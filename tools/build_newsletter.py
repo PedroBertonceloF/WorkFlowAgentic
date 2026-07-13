@@ -10,6 +10,7 @@ Uso:
 
 import html
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from fetch_devto import fetch_recent_articles
 from fetch_google_news import fetch_recent
 from fetch_hackernews import fetch_recent_stories
 from fetch_programathor import fetch_recent_br_jobs
+from fetch_remotar import fetch_data_jobs
 from fetch_remoteok_jobs import fetch_recent_jobs
+from fetch_sigproj_ufms import fetch_open_editais
 from summarize import enrich_summaries
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +37,17 @@ CONCURSOS_QUERIES = [
     "concurso publico TI analista de sistemas",
     "concurso publico tecnologia da informacao edital",
 ]
+
+# Secao "Estagios em Dados": ProgramaThor filtrado por area + Google News
+ESTAGIO_DADOS_QUERIES = [
+    'vaga estagio "analise de dados" OR "ciencia de dados"',
+    '"programa de estagio" dados tecnologia',
+]
+DATA_PATTERN = re.compile(
+    r"\b(dados|data|analytics|bi|business intelligence|power ?bi|"
+    r"machine learning|ciencia de dados|sql|etl|dashboards?)\b"
+)
+LEVEL_LABEL = {"estagio": "Estágio", "junior": "Júnior"}
 
 # Identidade visual PBF (ver .claude/LOGO.png) + regra 60-30-10 do ColorSheet:
 # 60% fundo off-white, 30% apoio azul, 10% destaque navy.
@@ -171,6 +185,53 @@ def collect_news(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
     return items, any_ok
 
 
+def _normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    return text.encode("ascii", "ignore").decode("ascii").lower()
+
+
+def collect_estagios_dados(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
+    """Estagios (e junior) na area de dados: ProgramaThor e Remotar filtrados
+    por area/nivel + anuncios de programas de estagio no Google News."""
+    seen: set = set()
+    items: list[dict] = []
+    any_ok = False
+    candidates: list[dict] = []
+    try:
+        jobs = fetch_recent_br_jobs(hours=7 * 24, max_items=40)
+        any_ok = True
+        candidates += [j for j in jobs
+                       if j.get("level") in LEVEL_LABEL
+                       and DATA_PATTERN.search(_normalize(j["title"]))]
+    except Exception as exc:
+        print(f"[aviso] falha ao buscar estagios de dados (ProgramaThor): {exc}")
+    try:
+        candidates += fetch_data_jobs(hours=7 * 24, max_items=10)
+        any_ok = True
+    except Exception as exc:
+        print(f"[aviso] falha ao buscar estagios de dados (Remotar): {exc}")
+
+    candidates.sort(key=lambda j: (0 if j["level"] == "estagio" else 1,
+                                   -j["pub_date"].timestamp()))
+    candidates = [{**j, "source": f"{j['source']} · {LEVEL_LABEL[j['level']]}"}
+                  for j in candidates]
+    _add_items(items, seen, sent_links, candidates, MAX_ITEMS_PER_SECTION)
+    if collect_google_news(ESTAGIO_DADOS_QUERIES, sent_links, seen, items, MAX_ITEMS_PER_SECTION):
+        any_ok = True
+    return items, any_ok
+
+
+def collect_sigproj(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
+    """Editais abertos no SIGProj da UFMS. Como o log de dedup e podado apos 7
+    dias, um edital que segue aberto reaparece semanalmente (lembrete util)."""
+    try:
+        editais = fetch_open_editais(max_items=MAX_ITEMS_PER_SECTION)
+    except Exception as exc:
+        print(f"[aviso] falha ao buscar editais do SIGProj UFMS: {exc}")
+        return [], False
+    return [e for e in editais if e["link"] not in sent_links], True
+
+
 def collect_concursos(sent_links: dict[str, str]) -> tuple[list[dict], bool]:
     seen: set = set()
     items: list[dict] = []
@@ -223,15 +284,25 @@ def render_rows(items: list[dict], summaries: dict[str, str], any_ok: bool) -> s
 def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
     today_label = date.today().strftime("%d/%m/%Y")
 
+    estagios_items, estagios_ok = collect_estagios_dados(sent_links)
+    sigproj_items, sigproj_ok = collect_sigproj(sent_links)
     news_items, news_ok = collect_news(sent_links)
     concursos_items, concursos_ok = collect_concursos(sent_links)
     remoteok_items, remoteok_ok = collect_remoteok(sent_links)
     br_items, br_ok = collect_programathor(sent_links)
 
+    # Nao repetir na secao generica do ProgramaThor o que ja esta em destaque
+    estagio_links = {it["link"] for it in estagios_items}
+    br_items = [j for j in br_items if j["link"] not in estagio_links]
+
     # Resumos: uma unica chamada pro que so tem titulo (noticias + concursos).
     # Vagas ja trazem descricao/titulo suficiente, nao entram no resumo.
     summaries = enrich_summaries(news_items + concursos_items)
 
+    estagios_section = render_section("🎯", "Estágios em Dados",
+                                      render_rows(estagios_items, summaries, estagios_ok))
+    sigproj_section = render_section("🎓", "Editais Abertos — SIGProj UFMS",
+                                     render_rows(sigproj_items, summaries, sigproj_ok))
     news_section = render_section("📰", "Noticias de Tecnologia",
                                   render_rows(news_items, summaries, news_ok))
     br_jobs_section = render_section("🇧🇷", "Vagas Tech no Brasil (ProgramaThor)",
@@ -240,7 +311,9 @@ def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
                                   render_rows(remoteok_items, summaries, remoteok_ok))
     concursos_section = render_section("📋", "Concursos Publicos de TI",
                                        render_rows(concursos_items, summaries, concursos_ok))
-    all_included = [it["link"] for it in news_items + concursos_items + remoteok_items + br_items]
+    all_included = [it["link"] for it in
+                    estagios_items + sigproj_items + news_items
+                    + concursos_items + remoteok_items + br_items]
 
     body = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -283,13 +356,16 @@ def build_body(sent_links: dict[str, str]) -> tuple[str, list[str]]:
               </p>
             </td>
           </tr>
+          {estagios_section}
+          {sigproj_section}
           {news_section}
           {br_jobs_section}
           {jobs_section}
           {concursos_section}
           <tr>
             <td style="padding-top:24px;font-size:11px;color:{COLOR_MUTED};">
-              Fontes: Google News, Hacker News, dev.to, ProgramaThor e Remote OK.
+              Fontes: Google News, Hacker News, dev.to, ProgramaThor, Remotar,
+              Remote OK e SIGProj UFMS.
               Gerado automaticamente todo dia.
             </td>
           </tr>

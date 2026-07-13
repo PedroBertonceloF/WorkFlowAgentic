@@ -2,9 +2,11 @@
 
 ## Objetivo
 Todo dia, montar e enviar por e-mail um resumo com:
-1. Notícias importantes da área de computação/tecnologia
-2. Vagas remotas de tecnologia (Remote OK)
-3. Concursos públicos relacionados a TI/computação
+1. Estágios (e júnior) na área de dados — seção em destaque no topo
+2. Editais abertos no SIGProj da UFMS
+3. Notícias importantes da área de computação/tecnologia
+4. Vagas remotas de tecnologia (Remote OK) e vagas tech BR (ProgramaThor)
+5. Concursos públicos relacionados a TI/computação
 
 Destinatário: `pedroberto2005@gmail.com` (default em `.env` -> `RECIPIENT_EMAIL`,
 ou secret `RECIPIENT_EMAIL` no GitHub Actions).
@@ -30,6 +32,16 @@ Execução automática: `.github/workflows/newsletter.yml`, cron diário às
   senioridade no título, últimas 72h. Foi a fonte gratuita e confiável de
   vagas BR que faltava (Indeed BR descontinuou RSS; Vagas.com/Catho/Gupy não
   expõem RSS público útil).
+- **Estágios em Dados** (seção no topo): ProgramaThor (filtrado por
+  palavras-chave de dados + nível estágio/júnior) + Remotar
+  (`tools/fetch_remotar.py`, API pública `api.remotar.com.br/jobs?page=N`,
+  categoria "Data Science / Analytics", senioridade inferida do título) +
+  Google News (anúncios de programas de estágio em dados). Estágio aparece
+  antes de júnior; o que entra aqui não repete na seção do ProgramaThor.
+- **Editais SIGProj UFMS**: `tools/fetch_sigproj_ufms.py` usa a API aberta
+  `sigproj.ufms.br/api/editais` (a página pública é uma SPA), filtra editais
+  com inscrição aberta e ordena pelo prazo mais próximo. Como o log de dedup
+  é podado após 7 dias, editais ainda abertos reaparecem semanalmente.
 
 ## Resumos (IA opcional, com fallback determinístico)
 `tools/summarize.py` gera um resumo de 1 linha em PT-BR para itens que só têm
